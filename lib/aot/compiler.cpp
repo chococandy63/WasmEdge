@@ -5719,17 +5719,22 @@ void Compiler::compile(const AST::TypeSection &TypeSec) noexcept {
                                   {Context->ExecCtxPtrTy, Context->Int8PtrTy,
                                    Context->Int8PtrTy, Context->Int8PtrTy},
                                   false);
-  const auto &FuncTypes = TypeSec.getContent();
-  const auto Size = FuncTypes.size();
+  auto SubTypes = TypeSec.getContent();
+  const auto Size = SubTypes.size();
   if (Size == 0) {
     return;
   }
-  Context->FunctionTypes.reserve(Size);
-  Context->FunctionWrappers.reserve(Size);
+  Context->FunctionTypes.reserve(SubTypes.size());
+  Context->FunctionWrappers.reserve(SubTypes.size());
 
   // Iterate and compile types.
-  for (size_t I = 0; I < Size; ++I) {
-    const auto &FuncType = FuncTypes[I];
+  for (size_t I = 0; I < SubTypes.size(); ++I) {
+    // TODO: GC - implement other composite types.
+    if (!SubTypes[I].getCompositeType().isFunc()) {
+      spdlog::error("GC proposal not supported for AOT currently.");
+      return;
+    }
+    const auto &FuncType = SubTypes[I].getCompositeType().getFuncType();
     const auto Name = fmt::format("t{}"sv, Context->FunctionTypes.size());
 
     // Check function type is unique
