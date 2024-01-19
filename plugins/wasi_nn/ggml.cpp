@@ -6,9 +6,11 @@
 
 #ifdef WASMEDGE_PLUGIN_WASI_NN_BACKEND_GGML
 #include "simdjson.h"
+#include <clip.h>
 #include <common.h>
 #include <cstdlib>
 #include <llama.h>
+#include <llava.h>
 #endif
 
 namespace WasmEdge::Host::WASINN::GGML {
@@ -77,6 +79,26 @@ Expect<ErrNo> parseMetadata(Graph &GraphRef, const std::string &Metadata,
     }
     GraphRef.ReversePrompt = ReversePrompt;
   }
+  if (Doc.at_key("mmproj").error() == simdjson::SUCCESS) {
+    std::string_view MMProjModelPath;
+    auto Err = Doc["mmproj"].get<std::string_view>().get(MMProjModelPath);
+    if (Err) {
+      spdlog::error(
+          "[WASI-NN] GGML backend: Unable to retrieve the mmproj option."sv);
+      return ErrNo::InvalidArgument;
+    }
+    GraphRef.MMProjModelPath = MMProjModelPath;
+  }
+  if (Doc.at_key("image").error() == simdjson::SUCCESS) {
+    std::string_view ImagePath;
+    auto Err = Doc["image"].get<std::string_view>().get(ImagePath);
+    if (Err) {
+      spdlog::error(
+          "[WASI-NN] GGML backend: Unable to retrieve the image option."sv);
+      return ErrNo::InvalidArgument;
+    }
+    GraphRef.ImagePath = ImagePath;
+  }
 
   // The model parameters.
   if (Doc.at_key("n-gpu-layers").error() == simdjson::SUCCESS) {
@@ -113,6 +135,7 @@ Expect<ErrNo> parseMetadata(Graph &GraphRef, const std::string &Metadata,
       return ErrNo::InvalidArgument;
     }
   }
+
   // The sampling parameters.
   if (Doc.at_key("temp").error() == simdjson::SUCCESS) {
     auto Err = Doc["temp"].get<double>().get(GraphRef.Temp);
@@ -157,6 +180,16 @@ Expect<ErrNo> parseMetadata(Graph &GraphRef, const std::string &Metadata,
   return ErrNo::Success;
 }
 
+Expect<ErrNo> setupGPTParam(Graph &GraphRef, gpt_params &GPTParams) {
+  GPTParams.sparams.temp = GraphRef.Temp;
+  GPTParams.sparams.penalty_repeat = GraphRef.RepeatPenalty;
+  GPTParams.sparams.penalty_repeat = GraphRef.RepeatPenalty;
+  GPTParams.sparams.penalty_present = GraphRef.PresencePenalty;
+  GPTParams.mmproj = GraphRef.MMProjModelPath;
+
+  return ErrNo::Success;
+}
+
 Expect<ErrNo> buildOutputMetadata(Context &CxtRef,
                                   std::string &Metadata) noexcept {
   std::string MetadataTemplate =
@@ -179,6 +212,10 @@ Expect<ErrNo> buildOutputMetadata(Context &CxtRef,
   return ErrNo::Success;
 }
 
+struct llava_context *llavaInit() {
+  return nullptr;
+}
+
 } // namespace details
 
 Expect<ErrNo> load(WasiNNEnvironment &Env, Span<const Span<uint8_t>> Builders,
@@ -193,6 +230,7 @@ Expect<ErrNo> load(WasiNNEnvironment &Env, Span<const Span<uint8_t>> Builders,
   GraphRef.StreamStdout = false;
   GraphRef.ReversePrompt = ""sv;
   GraphRef.NPredict = ContextDefault.n_ctx;
+  GraphRef.MMProjModelPath = ""sv;
   // Initialize the model parameters.
   GraphRef.NGPULayers = 0;
 #ifdef __APPLE__
@@ -293,6 +331,158 @@ Expect<ErrNo> load(WasiNNEnvironment &Env, Span<const Span<uint8_t>> Builders,
 
   // Disable llama log by default.
   log_disable();
+
+  // TODO: the following code is a test of llava model inference, will remove at
+  // release.
+  if (GraphRef.MMProjModelPath != ""sv) {
+    spdlog::info("[dm4] {}", GraphRef.MMProjModelPath);
+
+    // Llava init.
+    auto ClipContext =
+        clip_model_load(GraphRef.MMProjModelPath.c_str(), /*verbosity=*/0);
+
+    // Llama context init.
+    llama_context_params ContextParams = llama_context_default_params();
+    ContextParams.n_ctx = GraphRef.CtxSize;
+    ContextParams.n_batch = GraphRef.BatchSize;
+    ContextParams.n_threads = GraphRef.Threads;
+    ContextParams.n_threads_batch = GraphRef.Threads;
+    if (ContextParams.n_ctx < 2048) {
+      ContextParams.n_ctx = 2048;
+      spdlog::info(
+          "[WASI-NN] GGML backend: The context size is too small for llava, set it to 2048."sv);
+    }
+    auto LlamaContext =
+        llama_new_context_with_model(GraphRef.LlamaModel, ContextParams);
+
+    // Load image for llava.
+    spdlog::info("[dm4] load image: {}"sv, GraphRef.ImagePath);
+    auto ImageEmbed = llava_image_embed_make_with_filename(
+        ClipContext, ContextParams.n_threads, GraphRef.ImagePath.c_str());
+
+    // Llava inference.
+    int32_t NPast = 0;
+    const bool AddBos = llama_should_add_bos_token(GraphRef.LlamaModel);
+    // Llava prompt format:
+    // <SYSTEM_IMAGE>\nUSER:<IMAGE_EMBEDDINGS>\n<TEXTUAL_PROMPT>\nASSISTANT:
+    std::string Prompt =
+        "A chat between a curious human and an artificial intelligence "
+        "assistant. The assistant gives helpful, detailed, and polite answers "
+        "to the human's questions.\nUSER:{WASMEDGE_IMAGE}\nWhat is in this "
+        "picture?\nASSISTANT:";
+    const std::string_view PromptPlaceholder = "{WASMEDGE_IMAGE}";
+    auto PlaceholderPosition = Prompt.find(PromptPlaceholder);
+    if (PlaceholderPosition == std::string::npos) {
+      spdlog::error(
+          "[WASI-NN] GGML backend: Error: unable to find the placeholder in the llava prompt."sv);
+      return ErrNo::InvalidArgument;
+    }
+    std::string PromptBeforeImage = Prompt.substr(0, PlaceholderPosition);
+    std::string PromptAfterImage =
+        Prompt.substr(PlaceholderPosition + PromptPlaceholder.length());
+    spdlog::info("[dm4] prompt before image: {}"sv, PromptBeforeImage);
+    spdlog::info("[dm4] prompt after image: {}"sv, PromptAfterImage);
+
+    // Prompt before image.
+    std::vector<llama_token> EmbdInputBeforeImage =
+        llama_tokenize(LlamaContext, PromptBeforeImage, AddBos, true);
+    for (int I = 0; I < static_cast<int>(EmbdInputBeforeImage.size());
+         I += GraphRef.BatchSize) {
+      uint64_t NEval = static_cast<uint64_t>(EmbdInputBeforeImage.size()) - I;
+      if (NEval > static_cast<uint64_t>(GraphRef.BatchSize)) {
+        NEval = GraphRef.BatchSize;
+      }
+      const llama_seq_id SequenceId = 0;
+      auto Status = llama_decode(LlamaContext,
+                                 llama_batch_get_one(&EmbdInputBeforeImage[I],
+                                                     NEval, NPast, SequenceId));
+      if (Status == 1) {
+        spdlog::error(
+            "[WASI-NN] GGML backend: failed to llama_decode: try reducing the size of the batch or increasing the size of context"sv);
+        return ErrNo::RuntimeError;
+      } else if (Status < 0) {
+        spdlog::error(
+            "[WASI-NN] GGML backend: failed to llama_decode: internal fatal error. Please open an issue on GitHub"sv);
+        return ErrNo::RuntimeError;
+      }
+      NPast += NEval;
+    }
+
+    // Image.
+    llava_eval_image_embed(LlamaContext, ImageEmbed, GraphRef.BatchSize,
+                           &NPast);
+
+    // Prompt after image.
+    std::vector<llama_token> EmbdInputAfterImage =
+        llama_tokenize(LlamaContext, PromptAfterImage, false, true);
+    for (int I = 0; I < static_cast<int>(EmbdInputAfterImage.size());
+         I += GraphRef.BatchSize) {
+      uint64_t NEval = static_cast<uint64_t>(EmbdInputAfterImage.size()) - I;
+      if (NEval > static_cast<uint64_t>(GraphRef.BatchSize)) {
+        NEval = GraphRef.BatchSize;
+      }
+      const llama_seq_id SequenceId = 0;
+      auto Status = llama_decode(LlamaContext,
+                                 llama_batch_get_one(&EmbdInputAfterImage[I],
+                                                     NEval, NPast, SequenceId));
+      if (Status == 1) {
+        spdlog::error(
+            "[WASI-NN] GGML backend: failed to llama_decode: try reducing the size of the batch or increasing the size of context"sv);
+        return ErrNo::RuntimeError;
+      } else if (Status < 0) {
+        spdlog::error(
+            "[WASI-NN] GGML backend: failed to llama_decode: internal fatal error. Please open an issue on GitHub"sv);
+        return ErrNo::RuntimeError;
+      }
+      NPast += NEval;
+    }
+
+    // Sampling.
+    spdlog::info("[dm4] sampling..."sv);
+    gpt_params GPTParams;
+    GPTParams.sparams.temp = GraphRef.Temp;
+    GPTParams.sparams.top_p = GraphRef.TopP;
+    GPTParams.sparams.penalty_repeat = GraphRef.RepeatPenalty;
+    GPTParams.sparams.penalty_present = GraphRef.PresencePenalty;
+    struct llama_sampling_context *CtxSampling =
+        llama_sampling_init(GPTParams.sparams);
+    int NRemain = GraphRef.NPredict;
+    while (NRemain > 0) {
+      const llama_token Id =
+          llama_sampling_sample(CtxSampling, LlamaContext, nullptr);
+      llama_sampling_accept(CtxSampling, LlamaContext, Id, true);
+
+      // Deal with end of text token.
+      if (llama_sampling_last(CtxSampling) ==
+          llama_token_eos(GraphRef.LlamaModel)) {
+        if (GraphRef.EnableLog) {
+          spdlog::info("[WASI-NN] GGML backend: EOS token found"sv);
+        }
+        break;
+      }
+      std::cout << llama_token_to_piece(LlamaContext, Id) << std::flush;
+      std::vector<llama_token> Embd;
+      Embd.push_back(Id);
+      auto Status = llama_decode(LlamaContext,
+                                 llama_batch_get_one(&Embd[0], 1, NPast, 0));
+      if (Status == 1) {
+        spdlog::error(
+            "[WASI-NN] GGML backend: failed to llama_decode: try reducing the size of the batch or increasing the size of context"sv);
+        return ErrNo::RuntimeError;
+      } else if (Status < 0) {
+        spdlog::error(
+            "[WASI-NN] GGML backend: failed to llama_decode: internal fatal error. Please open an issue on GitHub"sv);
+        return ErrNo::RuntimeError;
+      }
+      NPast += 1;
+
+      NRemain--;
+    }
+    llama_sampling_free(CtxSampling);
+
+    // Llava free.
+    clip_free(ClipContext);
+  }
 
   return ErrNo::Success;
 }
@@ -511,7 +701,8 @@ Expect<ErrNo> compute(WasiNNEnvironment &Env, uint32_t ContextId) noexcept {
         break;
       }
 
-      // We do not swap context here. End the inference if the context is full.
+      // We do not swap context here. End the inference if the context is
+      // full.
       if (NPast + static_cast<uint64_t>(Embd.size()) > NCtx) {
         if (GraphRef.EnableLog) {
           spdlog::info(
@@ -716,7 +907,8 @@ Expect<ErrNo> computeSingle(WasiNNEnvironment &Env,
         return ErrNo::PromptTooLong;
       }
 
-      // We do not swap context here. End the inference if the context is full.
+      // We do not swap context here. End the inference if the context is
+      // full.
       if (CxtRef.LlamaNPast + static_cast<uint64_t>(CxtRef.LlamaEmbd.size()) >
           NCtx) {
         if (GraphRef.EnableLog) {

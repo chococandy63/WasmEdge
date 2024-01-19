@@ -123,7 +123,7 @@ endif()
 # https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1027876
 if(gRPCPP_FOUND AND WASMEDGE_BUILD_SHARED_LIB)
   message(STATUS "Setting WASMEDGE_BUILD_WASI_NN_RPC to ON. If you see an error related to gRPC or protobuf, try setting this to OFF.")
-  set(WASMEDGE_BUILD_WASI_NN_RPC ON)
+  set(WASMEDGE_BUILD_WASI_NN_RPC OFF)
 endif()
 if(WASMEDGE_BUILD_WASI_NN_RPC AND NOT WASMEDGE_BUILD_SHARED_LIB)
   message(FATAL_ERROR "WASMEDGE_BUILD_WASI_NN_RPC depends on WASMEDGE_BUILD_SHARED_LIB")

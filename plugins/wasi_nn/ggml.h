@@ -27,6 +27,8 @@ struct Graph {
   bool StreamStdout;
   uint64_t NPredict;
   std::string ReversePrompt;
+  std::string MMProjModelPath;
+  std::string ImagePath;
   // Model parameters:
   int64_t NGPULayers;
   // Context parameters:
