@@ -42,6 +42,7 @@ class Executor;
 
 namespace Runtime {
 
+class Environment;
 class StoreManager;
 class CallingFrame;
 
@@ -62,6 +63,14 @@ inline constexpr const bool IsInstanceV =
     IsEntityV<T> || std::is_same_v<T, Instance::ElementInstance> ||
     std::is_same_v<T, Instance::DataInstance>;
 } // namespace
+
+class ComponentInstance {
+public:
+  ComponentInstance(std::string_view Name) : CompName(Name) {}
+
+private:
+  std::string CompName;
+};
 
 class ModuleInstance {
 public:
@@ -408,6 +417,7 @@ protected:
   /// @}
 
   friend class Runtime::StoreManager;
+  friend class Runtime::Environment;
   using BeforeModuleDestroyCallback = void(StoreManager *Store,
                                            const ModuleInstance *Mod);
   void linkStore(StoreManager *Store, BeforeModuleDestroyCallback Callback) {
