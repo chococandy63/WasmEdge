@@ -30,7 +30,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y pkg-config protobuf-compiler-grpc libgrpc-dev libgrpc++-dev
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Ensure git safe directory
