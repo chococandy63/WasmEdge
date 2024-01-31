@@ -9,6 +9,7 @@
 #ifdef WASMEDGE_PLUGIN_WASI_NN_BACKEND_GGML
 #include <common.h>
 #include <llama.h>
+#include <llava.h>
 #endif
 
 namespace WasmEdge::Host::WASINN {
@@ -55,6 +56,9 @@ public:
   std::vector<llama_token> LlamaEmbd;
   uint64_t LlamaNPast;
   uint64_t LlamaNConsumed;
+  // Preserve for llava
+  struct llava_image_embed *LlavaImageEmbd = nullptr;
+  size_t LlavaImagePosition;
 };
 #else
 struct Graph {};
