@@ -63,6 +63,7 @@ if(LLVM_FOUND)
       option
       passes
       support
+      orcjit
       transformutils
       ${EXTRA_COMPONENTS}
     )
