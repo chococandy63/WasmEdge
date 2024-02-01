@@ -111,21 +111,23 @@ public:
   /// Get the length of the list of registered modules.
   uint32_t getModuleListSize() const noexcept {
     std::shared_lock Lock(Mutex);
-    return Env.getModuleListSize();
+    return CurEnv.getModuleListSize();
   }
   /// Get list of registered modules.
   template <typename CallbackT> auto getModuleList(CallbackT &&CallBack) const {
     std::shared_lock Lock(Mutex);
-    return Env.getModuleList(CallBack);
+    return CurEnv.getModuleList(CallBack);
   }
   const Instance::ModuleInstance *findModule(std::string_view Name) const {
     std::shared_lock Lock(Mutex);
-    return Env.findModule(Name);
+    return CurEnv.findModule(Name);
   }
   /// Reset this store manager and unlink all the registered module instances.
   void reset() noexcept {
     std::shared_lock Lock(Mutex);
-    return Env.reset(this);
+    for (auto &Env : EnvList) {
+      Env.reset(this);
+    }
   }
 
 private:
@@ -141,7 +143,7 @@ private:
   Expect<void> registerModule(std::string_view Name,
                               const Instance::ModuleInstance *ModInst) {
     std::shared_lock Lock(Mutex);
-    if (auto Res = Env.registerModule(Name, ModInst)) {
+    if (auto Res = CurEnv.registerModule(Name, ModInst)) {
       InstList.push_front(ModInst);
       // Link the module instance to this store manager.
       (const_cast<Instance::ModuleInstance *>(ModInst))
@@ -149,7 +151,7 @@ private:
                                const Instance::ModuleInstance *Inst) {
             // The unlink callback.
             std::unique_lock CallbackLock(Store->Mutex);
-            (Store->Env).removeModule(std::string(Inst->getModuleName()));
+            (Store->CurEnv).removeModule(std::string(Inst->getModuleName()));
           });
     } else {
       return Unexpect(Res);
@@ -164,20 +166,22 @@ private:
 
   void pushNamespace() noexcept {
     std::unique_lock Lock(Mutex);
-    auto P = std::make_shared<Environment>(Env);
-    Env = Environment(P);
+    auto P = std::make_shared<Environment>(CurEnv);
+    auto NewEnv = Environment(P);
+    EnvList.push_back(NewEnv);
+    CurEnv = NewEnv;
   }
 
   void popNamespace() noexcept {
     std::unique_lock Lock(Mutex);
-    Env = *Env.getParent();
+    CurEnv = *CurEnv.getParent();
   }
 
   /// \name Module instance order
   /// Create for De-Bruijn indicies
   std::list<const Instance::ModuleInstance *> InstList;
-  /// \name Module name mapping.
-  Environment Env;
+  Environment CurEnv;
+  std::vector<Environment> EnvList;
 
   /// \name Last instantiation failed module.
   /// According to the current spec, the instances should be able to be

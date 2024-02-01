@@ -53,12 +53,12 @@ Executor::instantiate(Runtime::StoreManager &StoreMgr,
         }
 
         auto Mod = ModList[Instantiate.getModuleIdx()];
-        if (auto Res = instantiate(StoreMgr, Mod, "")) {
-          StoreMgr.popNamespace();
-          StoreMgr.registerModule((*Res).get());
-        } else {
+        auto Res = instantiate(StoreMgr, Mod);
+        if (!Res) {
           return Unexpect(Res);
         }
+        StoreMgr.popNamespace();
+        StoreMgr.registerModule((*Res).get());
       } else {
         spdlog::info("inline exports");
         std::get<AST::Component::CoreInlineExports>(InstExpr).getExports();
