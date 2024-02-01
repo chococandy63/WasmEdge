@@ -5,6 +5,8 @@
 
 #include "host/wasi/wasimodule.h"
 #include "plugin/plugin.h"
+#include "llvm/compiler.h"
+#include "llvm/jit.h"
 
 #include "host/mock/wasi_crypto_module.h"
 #include "host/mock/wasi_logging_module.h"
@@ -398,6 +400,19 @@ Expect<void> VM::unsafeInstantiate() {
     spdlog::error(ErrCode::Value::WrongVMWorkflow);
     return Unexpect(ErrCode::Value::WrongVMWorkflow);
   }
+
+  if (Mod) {
+    if (Conf.getRuntimeConfigure().isEnableJIT() && !Mod->getSymbol()) {
+      LLVM::Compiler Compiler(Conf);
+      if (auto Data = Compiler.compile(*Mod)) {
+        LLVM::JIT JIT(Conf);
+        if (auto Executable = JIT.load(std::move(*Data))) {
+          LoaderEngine.loadExecutable(*Mod, std::move(*Executable));
+        }
+      }
+    }
+  }
+
   if (auto Res = ExecutorEngine.instantiateModule(StoreRef, *Mod.get())) {
     Stage = VMStage::Instantiated;
     ActiveModInst = std::move(*Res);

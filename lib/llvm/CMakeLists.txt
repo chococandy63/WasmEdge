@@ -13,7 +13,10 @@ if(LLVM_FOUND)
 
   if(WASMEDGE_LINK_LLVM_STATIC)
     wasmedge_add_library(wasmedgeLLVM
+      codegen.cpp
       compiler.cpp
+      data.cpp
+      jit.cpp
     )
 
     target_link_libraries(wasmedgeLLVM
@@ -46,9 +49,10 @@ if(LLVM_FOUND)
     endif()
 
     llvm_add_library(wasmedgeLLVM
-      compiler.cpp
       codegen.cpp
+      compiler.cpp
       data.cpp
+      jit.cpp
       LINK_LIBS
       wasmedgeCommon
       wasmedgeSystem

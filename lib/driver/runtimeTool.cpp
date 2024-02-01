@@ -108,6 +108,9 @@ int Tool(struct DriverToolOptions &Opt) noexcept {
       Conf.getStatisticsConfigure().setTimeMeasuring(true);
     }
   }
+  if (Opt.ConfEnableJIT.value()) {
+    Conf.getRuntimeConfigure().setEnableJIT(true);
+  }
   if (Opt.ConfForceInterpreter.value()) {
     Conf.getRuntimeConfigure().setForceInterpreter(true);
   }
